@@ -1,0 +1,32 @@
+module image_memory #(
+    parameter WIDTH  = 160,
+    parameter HEIGHT = 120,
+    parameter ADDR_WIDTH = $clog2(WIDTH*HEIGHT)
+)(
+    input  wire                 clk,
+    
+    // --- Puerto A: Escritura ---
+    input  wire                 we_a,
+    input  wire [ADDR_WIDTH-1:0] addr_a,
+    input  wire [2:0]           data_in_a,
+
+    // --- Puerto B: Lectura ---
+    input  wire [ADDR_WIDTH-1:0] addr_b,
+    output reg  [2:0]           data_out_b
+);
+
+    // Memoria: 3 bits por pixel
+    reg [2:0] mem [(WIDTH*HEIGHT)-1:0];
+
+    // Escritura en Puerto A
+    always @(posedge clk) begin
+        if (we_a)
+            mem[addr_a] <= data_in_a;
+    end
+
+    // Lectura en Puerto B
+    always @(posedge clk) begin
+        data_out_b <= mem[addr_b];
+    end
+
+endmodule
