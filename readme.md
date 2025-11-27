@@ -1,6 +1,6 @@
 # Módulo de memoria para imagen de 3 bits en la FPGA DE1-SoC
 
-Este README documenta el módulo `image_memory` diseñado para almacenar una imagen de **3 bits por píxel (8 colores)** dentro de la FPGA de la tarjeta **DE1-SoC**, como parte del proyecto de co-procesamiento para binarización y edición de imágenes descrito en el enunciado de Electrónica Digital. :contentReference[oaicite:0]{index=0}  
+Aqui se documenta el módulo `image_memory` diseñado para almacenar una imagen de **3 bits por píxel (8 colores)** dentro de la FPGA de la tarjeta **DE1-SoC**, como parte del proyecto de co-procesamiento para binarización y edición de imágenes descrito en el enunciado de Electrónica Digital. :contentReference[oaicite:0]{index=0}  
 
 El módulo se implementa como una **RAM dual-port**:
 
