@@ -1,56 +1,214 @@
-# Módulo de memoria para imagen de 3 bits en la FPGA DE1-SoC
+# 📘 **Sistema de imagen 3-bit para FPGA DE1-SoC**
 
-Aqui se documenta el módulo `image_memory` diseñado para almacenar una imagen de **3 bits por píxel (8 colores)** dentro de la FPGA de la tarjeta **DE1-SoC**, como parte del proyecto de co-procesamiento para binarización y edición de imágenes descrito en el enunciado de Electrónica Digital. Escrito y propuesto por el profesor Ramiro Andres Barrios de la Universidad Tecnológica de Pereira en el segundo semestre de 2025.
+Este proyecto implementa un sistema completo para:
 
-El módulo se implementa como una **RAM dual-port**:
+* Convertir imágenes a **3 bits por pixel (8 colores)**.
+* Enviarlas mediante **UART RS232** a la FPGA.
+* Almacenarlas en un **framebuffer en BRAM**.
+* Visualizarlas en un monitor a través del módulo VGA.
+* Modificarlas usando cursor + interruptores.
 
-- Un puerto se usa principalmente para **escritura** (desde UART / lógica de edición).
-- El otro puerto se usa principalmente para **lectura** (por el módulo de video VGA).
+El diseño combina:
+
+* Un **módulo de memoria en Verilog (dual-port BRAM)**.
+* Un **módulo monolítico en Python (`image_sender.py`)**.
+* Un **protocolo binario de comunicación simple y robusto**.
+* Una **batería de pruebas Pytest** para garantizar fiabilidad.
 
 ---
 
-## 1. Código del módulo comentado línea por línea
+# 📌 1. Módulo de memoria en FPGA (Verilog)
 
-A continuación se muestra el módulo completo con comentarios detallados **línea por línea** para entender su función y motivación.
+Este módulo almacena la imagen en formato **3-bit por píxel** en una **RAM dual-port** dentro de la FPGA.
+Está pensado para integrarse con:
+
+* El módulo UART (escritura).
+* El módulo VGA (lectura).
+* El módulo de cursor y edición (escritura).
+
+---
+
+## 🔧 **Código del módulo `image_memory.v` explicado línea por línea**
 
 ```verilog
-module image_memory #(                  // Declaración del módulo 'image_memory' con parámetros.
-    parameter WIDTH  = 160,             // Parámetro: ancho de la imagen en píxeles (por defecto 160).
-    parameter HEIGHT = 120,             // Parámetro: alto de la imagen en píxeles (por defecto 120).
-    parameter ADDR_WIDTH = $clog2(WIDTH*HEIGHT) 
-                                        // Parámetro: número de bits de dirección.
-                                        // Se calcula como log2(WIDTH*HEIGHT) usando $clog2.
+module image_memory #(
+    parameter WIDTH  = 160,             
+    parameter HEIGHT = 120,             
+    parameter ADDR_WIDTH = $clog2(WIDTH*HEIGHT)
 )(
-    input  wire                 clk,    // Reloj principal del sistema. Sincroniza lecturas y escrituras.
+    input  wire                 clk,
     
     // --- Puerto A: Escritura ---
-    input  wire                 we_a,   // Señal de escritura (Write Enable) del puerto A.
-                                        // Cuando we_a = 1, se escribe un pixel en la memoria.
-    input  wire [ADDR_WIDTH-1:0] addr_a,// Dirección de memoria para el puerto A (escritura).
+    input  wire                 we_a,  
+    input  wire [ADDR_WIDTH-1:0] addr_a,
     input  wire [2:0]           data_in_a,
-                                        // Datos de entrada del puerto A: un pixel de 3 bits (8 colores).
 
     // --- Puerto B: Lectura ---
-    input  wire [ADDR_WIDTH-1:0] addr_b,// Dirección de memoria para el puerto B (lectura).
+    input  wire [ADDR_WIDTH-1:0] addr_b,
     output reg  [2:0]           data_out_b
-                                        // Datos de salida del puerto B: pixel leído de la memoria (3 bits).
 );
 
-    // Memoria: 3 bits por pixel
-    reg [2:0] mem [(WIDTH*HEIGHT)-1:0]; // Declaración del arreglo de memoria.
-                                        // 'mem' tiene WIDTH*HEIGHT posiciones.
-                                        // Cada posición almacena 3 bits (un pixel).
+    reg [2:0] mem [(WIDTH*HEIGHT)-1:0];
 
-    // Escritura en Puerto A
-    always @(posedge clk) begin         // Bloque secuencial sensible al flanco positivo del reloj.
-        if (we_a)                       // Si la señal de escritura está activa...
-            mem[addr_a] <= data_in_a;   // ...se almacena el valor 'data_in_a' en la dirección 'addr_a'.
+    always @(posedge clk) begin
+        if (we_a)
+            mem[addr_a] <= data_in_a;
     end
 
-    // Lectura en Puerto B
-    always @(posedge clk) begin         // Bloque secuencial para la lectura, también sincronizado al reloj.
-        data_out_b <= mem[addr_b];      // En cada flanco de subida, se lee 'mem[addr_b]'
-                                        // y se asigna su valor a 'data_out_b'.
+    always @(posedge clk) begin
+        data_out_b <= mem[addr_b];
     end
 
-endmodule                                // Fin del módulo 'image_memory'.
+endmodule
+```
+
+### ✔ Decisiones de diseño
+
+* **Dual-port BRAM**: permite lectura VGA + escritura UART simultánea.
+* **3 bits por pixel**: cumplen el requisito del proyecto (8 colores).
+* **Memoria interna de FPGA (M10K)**: garantiza latencia mínima.
+* **Acceso secuencial FIFO-friendly** por puerto A.
+* **Acceso aleatorio** por puerto B para VGA.
+
+### ✔ Integración con otros módulos
+
+| Módulo       | Interacción                               |
+| ------------ | ----------------------------------------- |
+| UART RX      | Escribe bytes (3 bits útiles) en Puerto A |
+| Cursor/Paint | Escribe sobrescribiendo píxeles           |
+| VGA          | Lee píxeles por Puerto B                  |
+
+---
+
+# 📌 2. Módulo Python monolítico: `image_sender.py`
+
+Este módulo:
+
+1. Carga una imagen (.png/.jpg).
+2. La convierte a 3 bits por píxel mediante cuantización RGB → paleta fija de 8 colores.
+3. La redimensiona a la resolución de la FPGA.
+4. Empaqueta los datos usando un protocolo binario.
+5. Envía todo por UART a la FPGA.
+
+---
+
+## 🎨 Paleta de 8 colores (3 bits)
+
+```
+0: negro      (0, 0, 0)
+1: azul       (0, 0, 255)
+2: verde      (0, 255, 0)
+3: cian       (0, 255, 255)
+4: rojo       (255, 0, 0)
+5: magenta    (255, 0, 255)
+6: amarillo   (255, 255, 0)
+7: blanco     (255, 255, 255)
+```
+
+El algoritmo elige el color más cercano mediante distancia Euclídea RGB.
+
+---
+
+## 🔌 Protocolo de comunicación PC → FPGA
+
+El paquete enviado tiene este formato:
+
+```
+[0..3]  "IMG3"
+[4..5]  ancho (big-endian)
+[6..7]  alto (big-endian)
+[8..N]  datos de píxel (1 byte por pixel, bits [2:0] = color)
+```
+
+Ejemplo:
+
+| Byte | Contenido                |
+| ---- | ------------------------ |
+| 0–3  | "IMG3"                   |
+| 4–5  | Width (2 bytes)          |
+| 6–7  | Height (2 bytes)         |
+| 8…   | Píxeles de 3 bits en LSB |
+
+La FPGA solo necesita leer el LSB del byte:
+
+```verilog
+pixel_value <= uart_rx_byte[2:0];
+```
+
+---
+
+## 🧾 Código del módulo Python (resumen)
+
+El módulo incluye:
+
+* Cuantización: `_quantize_color_to_palette_3bit()`
+* Lectura y resize de imagen: `load_and_convert_to_3bit_indices()`
+* Empaquetamiento de protocolo: `build_image_packet()`
+* Envío por UART: `send_packet_over_serial()`
+* CLI integrada con argparse.
+
+Ejemplo de uso:
+
+```bash
+python image_sender.py -i foto.png -p COM3
+```
+
+---
+
+# 📌 3. Batería de pruebas con Pytest
+
+Las pruebas cubren:
+
+* Distancias de color.
+* Cuantización exacta y aproximada.
+* Conversión de imagen → índices 3-bit.
+* Empaquetado correcto del protocolo.
+* Mock del puerto serial (sin hardware real).
+* Mock de la CLI.
+
+---
+
+## 📁 Estructura recomendada
+
+```
+tests/
+├── test_palette.py
+├── test_image_processing.py
+├── test_packet.py
+├── test_serial.py
+└── test_cli.py
+```
+
+---
+
+## 🧪 Ejecución de pruebas
+
+```bash
+pytest -v
+```
+
+---
+
+# 📌 4. Arquitectura completa del sistema
+
+```
+            +---------------------+
+            |      PC / Python    |
+            |  image_sender.py    |
+            +----------+----------+
+                       |
+                       | UART (RS232)
+                       |
++----------------------+-----------------------+
+|                    FPGA                     |
+|                                              |
+|   +------------+     +------------------+    |
+|   | UART RX    +---->+ image_memory.v   +---→ VGA
+|   +------------+     +------------------+    |
+|          ▲                 ▲                 |
+| cursor   |                 |                 |
+| painter  |          lectura/visualización    |
+|          |                                   |
++----------+-----------------------------------+
+```
+
